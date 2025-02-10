@@ -5,6 +5,7 @@ import polars as pl
 
 from img2table.tables.objects.cell import Cell
 from img2table.tables.objects.table import Table
+from collections import defaultdict
 
 
 @dataclass
@@ -129,6 +130,30 @@ class OCRDataframe:
         df_words_contained = df_areas.filter(pl.col('int_area') / pl.col('w_area') > 0.5)
 
         # Group text by parent
+        def concat_cell(params):
+            groups = defaultdict(lambda: [])
+            for row in params.to_list():
+                found_group_y = None
+                for group_y in groups:
+                    if abs(group_y - row['y1']) <= 4:
+                        found_group_y = group_y
+                        break
+                if found_group_y is None:
+                    found_group_y = row['y1']
+                groups[found_group_y].append(row)
+            result = ''
+            prev_y = None
+            for group_y, rows in sorted(groups.items()):
+                for row in sorted(rows, key=lambda r: r['x1']):
+                    if prev_y is not None:
+                        if row['y1'] > (prev_y+3):
+                            result += '\n'
+                        else:
+                            result += ' '
+                    result += row['value']
+                    prev_y = row['y1']
+            return result
+
         df_text_parent = (df_words_contained
                           .group_by(['row', 'col', 'parent'])
                           .agg([pl.col('x1').min(),
@@ -138,7 +163,7 @@ class OCRDataframe:
                                 pl.col('value').map_elements(lambda x: ' '.join(x), return_dtype=str).alias('value')])
                           .sort([pl.col("row"), pl.col("col"), pl.col('y1'), pl.col('x1')])
                           .group_by(['row', 'col'])
-                          .agg(pl.col('value').map_elements(lambda x: '\n'.join(x).strip(), return_dtype=str).alias('text'))
+                          .agg(pl.struct(['x1', 'y1', 'value']).map_elements(concat_cell, return_dtype=str).alias('text'))
                           )
 
         # Implement found values to table cells content
